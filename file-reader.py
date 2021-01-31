@@ -12,35 +12,56 @@ import moviepy
 from pytesseract import *
 from moviepy.editor import *
 import enum
+import argparse
 
 # Using enum class create enumerations
 class SEARCH_MODE(enum.Enum):
    FIND_GAME_TIME = 1
    USE_DIFF = 2
+   SKIP_INTERMISSION = 3
 
 #Global Variables
-video_file = 'G14-Purdue-5min.mp4'
+video_file = 'G14-Purdue.mp4'
 text_file = 'timestamps.txt'
 game_words = ['Michigan', 'Purdue', 'FS1', 'fsi', 'half']
+exp_dir = 'exp_clips'
 
 file_expression = '(0?[1-9]|1[0-9]):[0-5][0-9]'
 video_expression = '\s(0?[1-9]|1[0-9]):[0-5][0-9]'
 f_pattern = re.compile(file_expression)
 v_pattern = re.compile(video_expression)
 
-exp_dir = 'exp_clips'
+fps=60
+frame_msec=0
 
-fps = 30
-frame_msec = 0
+box_x1=0
+box_x2=0
+box_y1=0
+box_y2=0
 
-def read_file(txt_file):
+time_box_defined = False
+
+
+def read_file(txt_file, starttime):
     times = []
+    checkstart = False
+    paststart = True
+
+    if starttime:
+        checkstart = True
+        paststart = False
 
     with open(txt_file, 'r') as f:
         for line in f:
             m = re.search(f_pattern, line)
             if (m):
-                times.append(m.group())
+                m_string = m.group()
+                if checkstart:
+                    if m_string == starttime:
+                        checkstart = False
+                        paststart = True
+                if paststart:
+                    times.append(m_string)
 
     return times
 
@@ -52,29 +73,126 @@ def create_clip_dir():
         os.makedirs(exp_dir)
 
 def is_game_screen(game_words, search_text):
+    print("Search_text:", search_text)
+    print("game_words:", game_words)
     for word in game_words:
         if word.lower() in search_text.lower():
             return True
     return False
 
+def define_timebox_coords(image, game_time):
+    screen_info = pytesseract.image_to_boxes(image)
+    time_chars = list(game_time)
+    time_len = len(game_time)
+
+    global time_box_defined
+
+    lines = screen_info.splitlines()
+    i=0
+    j=1
+    buffer = 10
+    match = False
+
+    height, width, channels = image.shape
+
+    print("Checking coords for timebox")
+    print("time_chars: ", time_chars)
+    for line in lines:
+        if (line[0] == time_chars[0]):
+            print("Match of first character")
+            match = True
+            while (j < time_len):
+                print("j:", j)
+                print("lines[i+j][0]:", lines[i+j][0])
+                print("time_chars[j]:", time_chars[j])
+                if (lines[i+j][0] != time_chars[j]):
+                    match = False
+                    j = 1
+                    break
+                j += 1
+            if (match):
+                print("Setting box coordinates")
+                #set our coordinates
+                test = lines[i].split()
+
+                global box_x1, box_x2, box_y1, box_y2
+
+                box_x1 = int(lines[i].split()[1]) - buffer
+                box_x2 = int(lines[i+j-1].split()[3]) + buffer
+
+                box_y1 = height - int(lines[i+j-1].split()[4]) - buffer
+                box_y2 = height - int(lines[i].split()[2]) + buffer
+
+                print("box_x1:", box_x1)
+                print("box_x2:", box_x2)
+                print("box_y1", box_y1)
+                print("box_y2", box_y2)
+                
+                time_box_defined = True
+                
+                break
+
+        i += 1
+    return time_box_defined
+
 def get_game_time(pattern, image):
     time = None
+    global time_box_defined
     
     if (image.any()):
-        text = pytesseract.image_to_string(image,lang='eng')
-        text = ' '.join(text.split())
-        print(text)
-        game_time = re.search(pattern, text)
-        if (game_time and is_game_screen(game_words, text)):
-            time = game_time.group()
+
+        if (time_box_defined):
+            image = image[box_y1:box_y2, box_x1:box_x2]
+            text = pytesseract.image_to_string(image,lang='eng')
+            text = ' '.join(text.split())
+            print("text:", text)
+            game_time = re.search(pattern, text)
+            print("game_time:", game_time)
+            if game_time:
+                game_time = game_time.group().strip()
+                game_screen = f_pattern.match(game_time)
+            else:
+                game_screen = False
+        else :
+            print("time box not defined")
+            text = pytesseract.image_to_string(image,lang='eng')
+            text = ' '.join(text.split())
+            print("text:", text)
+            game_time = re.search(pattern, text)
+            print("game_time:", game_time)
+            if game_time:
+                game_time = game_time.group().strip()
+                print("text:", text)
+            game_screen = is_game_screen(game_words, text)
+            print("game_screen:", game_screen)
+
+        if (game_time and game_screen):
+            time = game_time
+
+            if (not time_box_defined):
+                time_box_defined = define_timebox_coords(image, time)
 
     return time
+
+def get_str(time_sec):
+
+    time_msec = time_sec * 1000
+    total_frames = time_msec / frame_msec
+    fpm = fps**2
+
+    minutes_int = int(total_frames / fpm)
+    total_frames = total_frames - (minutes_int*fpm)
+
+    seconds_int = int(total_frames / fps)
+    frames = total_frames - (seconds_int*fps)
+
+    return '%02d:%02d:%02d' % (minutes_int, seconds_int, int(frames))
 
 def get_sec(time_str):
     m, s = time_str.split(':')
     return int(m) * 60 + int(s)
 
-def move_playhead(vidcap, time_diff, mode):
+def move_playhead(vidcap, time_diff, mode, prev_time, count):
     curr_time = vidcap.get(cv2.CAP_PROP_POS_MSEC)
 
     if (mode == SEARCH_MODE.FIND_GAME_TIME):
@@ -86,9 +204,20 @@ def move_playhead(vidcap, time_diff, mode):
         if (abs(time_diff) <= 2):
             skip_time *= (1/6)
 
+        if int(count) > 20:
+            time_diff *= 2
+
     elif (mode == SEARCH_MODE.USE_DIFF):
         skip_time = time_diff
-        
+        if (abs(time_diff) <= 2):
+            skip_time *= (1/6)
+
+    elif (mode == SEARCH_MODE.SKIP_INTERMISSION):
+        skip_time = prev_time + (60*15)
+    
+    if (skip_time < 0):
+        skip_time -= 1
+
     new_time = curr_time + (skip_time * 1000)
     print ("Current time : ", curr_time / 1000)
     print ("time_diff : ", time_diff)
@@ -96,7 +225,7 @@ def move_playhead(vidcap, time_diff, mode):
     print( 'Set New Position to : ', (new_time / 1000))
 
 def cut_clip(vidcap, game_time):
-    clip = VideoFileClip("G14-Purdue-5min.mp4")
+    clip = VideoFileClip(video_file)
 
     vidcap_pos = (vidcap.get(cv2.CAP_PROP_POS_MSEC) / 1000)
 
@@ -105,8 +234,8 @@ def cut_clip(vidcap, game_time):
     end_ts = vidcap_pos + 3
 
     clip = clip.subclip(start_ts, end_ts)
-    filename = exp_dir + '/exp_' + game_time.strip() + '_' + str(int(vidcap_pos)) + '.mp4'
-    clip.write_videofile(filename)
+    filename = exp_dir + '/' + game_time.strip() + '_' + get_str(vidcap_pos) + '.mp4'
+    clip.write_videofile(filename, temp_audiofile='temp.mp3')
 
 def create_clips(timestamps, videoFile):
 
@@ -115,26 +244,32 @@ def create_clips(timestamps, videoFile):
 
     # Create our video capture object
     vidcap = cv2.VideoCapture(videoFile)
+    vidcap.set(cv2.CAP_PROP_POS_MSEC, 60*5*1000)
     success,image = vidcap.read()
     
     # Set up the initial target time
     target_time = get_sec(timestamps.pop(0))
-    time_diff = 0
+    time_diff = 10
+    prev_time = 0
     
     # How many MS per frame
     fps = vidcap.get(cv2.CAP_PROP_FPS)
+    global frame_msec
     frame_msec = 1000 / fps
 
     # Set our mode to search for game time
     mode = SEARCH_MODE.FIND_GAME_TIME
+    count = 0
+
+    global time_box_defined
 
     while success:
         # Read in frame
         success, image = vidcap.read()
-        print("Position: " + str(vidcap.get(cv2.CAP_PROP_POS_MSEC) / 1000))
-
+        print("Position: " + get_str(vidcap.get(cv2.CAP_PROP_POS_MSEC) / 1000))
+        print("Count: " + str(count))
         # Parse the time from the image ex. 19:34
-        game_time = get_game_time(v_pattern, image)
+        game_time = get_game_time(f_pattern, image)
 
         if (game_time):
             print ("Found game time: ", game_time)
@@ -147,15 +282,21 @@ def create_clips(timestamps, videoFile):
             if (game_time_sec == target_time):
                 print("Matched time: ", game_time)
                 cut_clip(vidcap, game_time)
+                prev_time = target_time
                 target_time = get_sec(timestamps.pop(0))
+                
+                if (target_time > prev_time):
+                    mode = SEARCH_MODE.SKIP_INTERMISSION
             
             #Calculate the difference needed to get to target
             time_diff = game_time_sec - target_time
+            count=0
                 
         else:
             mode = SEARCH_MODE.FIND_GAME_TIME
-                
-        move_playhead(vidcap, time_diff, mode)
+            count += 1
+
+        move_playhead(vidcap, time_diff, mode, prev_time, count)
         print ("\n")
 
     vidcap.release()
@@ -163,8 +304,18 @@ def create_clips(timestamps, videoFile):
 
 def main():
 
+    # Parse arguments
+    parser = argparse.ArgumentParser()
+
+    #-s STARTTIME
+    parser.add_argument("-s", "--starttime", dest = "starttime", default = None, help="Start time")
+    args = parser.parse_args()
+
+    print( "Starttime {}".format(args.starttime))
+
     # Read the tiemstamps into a list
-    timestamps = read_file(text_file)
+    timestamps = read_file(text_file, args.starttime)
+    print("timestamps:", timestamps)
 
     # Create a clip for each timestamp
     create_clips(timestamps, video_file)
