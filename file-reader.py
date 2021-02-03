@@ -12,6 +12,8 @@ import moviepy
 from moviepy.editor import *
 import enum
 import argparse
+import pathlib
+from pathlib import Path
 
 # Set up pytesseract
 def is_Windows():
@@ -57,6 +59,14 @@ box_y2=0
 
 time_box_defined = False
 period = 1
+
+def read_args():
+
+    parser = argparse.ArgumentParser()
+
+    #-s STARTTIME
+    parser.add_argument("-s", "--starttime", dest = "starttime", default = None, help="Start time")
+    return parser.parse_args()
 
 def read_file(txt_file, starttime):
     times = []
@@ -277,7 +287,7 @@ def cut_clip(vidcap, game_time):
     end_ts = vidcap_pos + 3
 
     clip = clip.subclip(start_ts, end_ts)
-    filename = exp_dir + '\\P' + str(period) + '_' + game_time.strip() + '_' + get_str(vidcap_pos) + '.mp4'
+    filename = os.path.join(exp_dir, 'P' + str(period) + '_' + game_time.strip() + '_' + get_str(vidcap_pos) + '.mp4')
     escaped_filename = escape_filename(filename)
     clip.write_videofile(escaped_filename, temp_audiofile='temp.mp3')
 
@@ -348,12 +358,8 @@ def create_clips(timestamps, videoFile):
 
 def main():
 
-    # Parse arguments
-    parser = argparse.ArgumentParser()
-
-    #-s STARTTIME
-    parser.add_argument("-s", "--starttime", dest = "starttime", default = None, help="Start time")
-    args = parser.parse_args()
+    # Read in command line arguments
+    args = read_args()
 
     # Set up the directory for our exports
     create_clip_dir(args.starttime)
