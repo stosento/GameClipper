@@ -9,10 +9,21 @@ import PIL
 from PIL import Image 
 import pytesseract
 import moviepy
-from pytesseract import *
 from moviepy.editor import *
 import enum
 import argparse
+
+# Set up pytesseract
+def is_Windows():
+    val = False
+    if os.name == 'nt':
+        val = True
+    return val
+
+if is_Windows():
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+else:
+    from pytesseract import *
 
 # Using enum class create enumerations
 class SEARCH_MODE(enum.Enum):
@@ -20,16 +31,21 @@ class SEARCH_MODE(enum.Enum):
    USE_DIFF = 2
    SKIP_INTERMISSION = 3
 
-#Global Variables
+# Global Variables
 video_file = 'G14-Purdue.mp4'
 text_file = 'timestamps.txt'
 game_words = ['Michigan', 'Purdue', 'FS1', 'fsi', 'half']
 exp_dir = 'exp_clips'
 
 file_expression = '(0?[1-9]|1[0-9]):[0-5][0-9]'
-video_expression = '\s(0?[1-9]|1[0-9]):[0-5][0-9]'
+file_expression_zero = '0:[0-5][0-9]'
+video_expression_zero = ':[0-5][0-9]'
+decimal_expression = '[0-5][0-9]\.[0-9]'
+
 f_pattern = re.compile(file_expression)
-v_pattern = re.compile(video_expression)
+f0_pattern = re.compile(file_expression_zero)
+v0_pattern = re.compile(video_expression_zero)
+dec_pattern = re.compile(decimal_expression)
 
 fps=60
 frame_msec=0
@@ -40,7 +56,7 @@ box_y1=0
 box_y2=0
 
 time_box_defined = False
-
+period = 1
 
 def read_file(txt_file, starttime):
     times = []
@@ -54,8 +70,12 @@ def read_file(txt_file, starttime):
     with open(txt_file, 'r') as f:
         for line in f:
             m = re.search(f_pattern, line)
-            if (m):
-                m_string = m.group()
+            m0 = re.search(f0_pattern, line)
+            if (m or m0):
+                if m:
+                    m_string = m.group()
+                else:
+                    m_string = m0.group()
                 if checkstart:
                     if m_string == starttime:
                         checkstart = False
@@ -65,11 +85,11 @@ def read_file(txt_file, starttime):
 
     return times
 
-def create_clip_dir():
-    if not os.path.exists(exp_dir):
-        os.makedirs(exp_dir)
-    else:
+def create_clip_dir(starttime):
+    if os.path.exists(exp_dir) and not starttime:
         shutil.rmtree(exp_dir)
+        os.makedirs(exp_dir)
+    elif not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
 
 def is_game_screen(game_words, search_text):
@@ -90,7 +110,7 @@ def define_timebox_coords(image, game_time):
     lines = screen_info.splitlines()
     i=0
     j=1
-    buffer = 10
+    buffer = 20
     match = False
 
     height, width, channels = image.shape
@@ -135,7 +155,7 @@ def define_timebox_coords(image, game_time):
         i += 1
     return time_box_defined
 
-def get_game_time(pattern, image):
+def get_game_time(pattern, pattern0, dec_pattern, image):
     time = None
     global time_box_defined
     
@@ -143,14 +163,22 @@ def get_game_time(pattern, image):
 
         if (time_box_defined):
             image = image[box_y1:box_y2, box_x1:box_x2]
-            text = pytesseract.image_to_string(image,lang='eng')
+            text = pytesseract.image_to_string(image,lang='eng',config='--psm 10 --oem 3')
             text = ' '.join(text.split())
             print("text:", text)
             game_time = re.search(pattern, text)
+            game_time_0 = re.search(pattern0, text)
+            game_time_dec = re.search(dec_pattern, text)
             print("game_time:", game_time)
             if game_time:
                 game_time = game_time.group().strip()
                 game_screen = f_pattern.match(game_time)
+            elif game_time_0:
+                game_time = game_time_0.group().strip()
+                game_screen = v0_pattern.match(game_time)
+            elif game_time_dec:
+                game_time = game_time_dec.group().strip()
+                game_screen = dec_pattern.match(game_time)
             else:
                 game_screen = False
         else :
@@ -159,10 +187,16 @@ def get_game_time(pattern, image):
             text = ' '.join(text.split())
             print("text:", text)
             game_time = re.search(pattern, text)
+            game_time_0 = re.search(pattern0, text)
+            game_time_dec = re.search(dec_pattern, text)
             print("game_time:", game_time)
             if game_time:
                 game_time = game_time.group().strip()
                 print("text:", text)
+            elif game_time_0:
+                game_time = game_time_0.group().strip()
+            elif game_time_dec:
+                game_time = game_time_dec.group().strip()
             game_screen = is_game_screen(game_words, text)
             print("game_screen:", game_screen)
 
@@ -178,7 +212,11 @@ def get_str(time_sec):
 
     time_msec = time_sec * 1000
     total_frames = time_msec / frame_msec
+    fph = fps**3
     fpm = fps**2
+
+    hours_int = int(total_frames / fph)
+    total_frames = total_frames - (hours_int*fph)
 
     minutes_int = int(total_frames / fpm)
     total_frames = total_frames - (minutes_int*fpm)
@@ -186,43 +224,48 @@ def get_str(time_sec):
     seconds_int = int(total_frames / fps)
     frames = total_frames - (seconds_int*fps)
 
-    return '%02d:%02d:%02d' % (minutes_int, seconds_int, int(frames))
+    return '%02d:%02d:%02d:%02d' % (hours_int, minutes_int, seconds_int, int(frames))
 
 def get_sec(time_str):
-    m, s = time_str.split(':')
-    return int(m) * 60 + int(s)
+    if (':' in time_str):
+        m, s = time_str.split(':')
+    else:
+        m = None
+        s = int(float(time_str))
+    if m and s:
+        total_sec = int(m) * 60 + int(s)
+    else:
+        total_sec = int(s)
+    return total_sec
+
+def escape_filename(filename):
+    return filename.replace(":", "-")
 
 def move_playhead(vidcap, time_diff, mode, prev_time, count):
     curr_time = vidcap.get(cv2.CAP_PROP_POS_MSEC)
 
     if (mode == SEARCH_MODE.FIND_GAME_TIME):
         if (time_diff >= 0):
-            skip_time = 1
+            skip_time = 1/6
         elif (time_diff < 0):
-            skip_time = -1
+            skip_time = -(1/6)
 
-        if (abs(time_diff) <= 2):
-            skip_time *= (1/6)
-
-        if int(count) > 20:
-            time_diff *= 2
+        if count >= 10:
+            skip_time = skip_time * (count / 10)
 
     elif (mode == SEARCH_MODE.USE_DIFF):
         skip_time = time_diff
         if (abs(time_diff) <= 2):
             skip_time *= (1/6)
+        if (skip_time < 0):
+            skip_time -= 1
 
     elif (mode == SEARCH_MODE.SKIP_INTERMISSION):
         skip_time = prev_time + (60*15)
-    
-    if (skip_time < 0):
-        skip_time -= 1
 
     new_time = curr_time + (skip_time * 1000)
-    print ("Current time : ", curr_time / 1000)
-    print ("time_diff : ", time_diff)
+    print ("skip_time : ", skip_time)
     vidcap.set(cv2.CAP_PROP_POS_MSEC, new_time)
-    print( 'Set New Position to : ', (new_time / 1000))
 
 def cut_clip(vidcap, game_time):
     clip = VideoFileClip(video_file)
@@ -234,13 +277,11 @@ def cut_clip(vidcap, game_time):
     end_ts = vidcap_pos + 3
 
     clip = clip.subclip(start_ts, end_ts)
-    filename = exp_dir + '/' + game_time.strip() + '_' + get_str(vidcap_pos) + '.mp4'
-    clip.write_videofile(filename, temp_audiofile='temp.mp3')
+    filename = exp_dir + '\\P' + str(period) + '_' + game_time.strip() + '_' + get_str(vidcap_pos) + '.mp4'
+    escaped_filename = escape_filename(filename)
+    clip.write_videofile(escaped_filename, temp_audiofile='temp.mp3')
 
 def create_clips(timestamps, videoFile):
-
-    # Set up the directory for our exports
-    create_clip_dir()
 
     # Create our video capture object
     vidcap = cv2.VideoCapture(videoFile)
@@ -254,6 +295,7 @@ def create_clips(timestamps, videoFile):
     
     # How many MS per frame
     fps = vidcap.get(cv2.CAP_PROP_FPS)
+    print(fps)
     global frame_msec
     frame_msec = 1000 / fps
 
@@ -262,6 +304,7 @@ def create_clips(timestamps, videoFile):
     count = 0
 
     global time_box_defined
+    global period
 
     while success:
         # Read in frame
@@ -269,7 +312,7 @@ def create_clips(timestamps, videoFile):
         print("Position: " + get_str(vidcap.get(cv2.CAP_PROP_POS_MSEC) / 1000))
         print("Count: " + str(count))
         # Parse the time from the image ex. 19:34
-        game_time = get_game_time(f_pattern, image)
+        game_time = get_game_time(f_pattern, v0_pattern, dec_pattern, image)
 
         if (game_time):
             print ("Found game time: ", game_time)
@@ -287,6 +330,7 @@ def create_clips(timestamps, videoFile):
                 
                 if (target_time > prev_time):
                     mode = SEARCH_MODE.SKIP_INTERMISSION
+                    period += 1
             
             #Calculate the difference needed to get to target
             time_diff = game_time_sec - target_time
@@ -311,7 +355,8 @@ def main():
     parser.add_argument("-s", "--starttime", dest = "starttime", default = None, help="Start time")
     args = parser.parse_args()
 
-    print( "Starttime {}".format(args.starttime))
+    # Set up the directory for our exports
+    create_clip_dir(args.starttime)
 
     # Read the tiemstamps into a list
     timestamps = read_file(text_file, args.starttime)
