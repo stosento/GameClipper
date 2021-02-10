@@ -14,6 +14,7 @@ import enum
 import argparse
 import pathlib
 from pathlib import Path
+import configparser
 
 # Set up pytesseract
 def is_Windows():
@@ -34,9 +35,9 @@ class SEARCH_MODE(enum.Enum):
    SKIP_INTERMISSION = 3
 
 # Global Variables
-video_file = 'G14-Purdue.mp4'
-text_file = 'timestamps.txt'
-game_words = ['Michigan', 'Purdue', 'FS1', 'fsi', 'half']
+video_file = 'G13-Mary-GAME.mp4'
+text_file = 'timestamps-maryland.txt'
+game_words = ['Michigan', 'Maryland', 'FS1', 'fsi', 'half']
 exp_dir = 'exp_clips'
 
 file_expression = '(0?[1-9]|1[0-9]):[0-5][0-9]'
@@ -66,6 +67,9 @@ def read_args():
 
     #-s STARTTIME
     parser.add_argument("-s", "--starttime", dest = "starttime", default = None, help="Start time")
+    #-t TEST
+    parser.add_argument("-t", "--test", dest = "test", default = None, help = "Test time")
+
     return parser.parse_args()
 
 def read_file(txt_file, starttime):
@@ -93,6 +97,7 @@ def read_file(txt_file, starttime):
                 if paststart:
                     times.append(m_string)
 
+    print("timestamps:", times)
     return times
 
 def create_clip_dir(starttime):
@@ -109,6 +114,54 @@ def is_game_screen(game_words, search_text):
         if word.lower() in search_text.lower():
             return True
     return False
+
+def run_test(time_str):
+
+    # Create our video capture object
+    vidcap = cv2.VideoCapture(video_file)
+    
+    # How many MS per frame
+    fps = vidcap.get(cv2.CAP_PROP_FPS)
+    global frame_msec
+    frame_msec = 1000 / fps
+
+    # Convert the input timestamp to ms
+    total_msec = convert_long_timestamp(time_str)
+
+    # Move to the position we are interested in
+    vidcap.set(cv2.CAP_PROP_POS_MSEC,total_msec)
+    success,image = vidcap.read()
+
+    # Print our non-cropped image
+    cv2.imwrite('test.png', image)
+
+    # Read in the box coordinates
+    box_x1 = 1352
+    box_x2 = 1472
+    box_y1 = 917
+    box_y2 = 978
+
+    # Take the cropped image
+    crop_image = image[box_y1:box_y2, box_x1:box_x2]
+
+    # Print our cropped image
+    cv2.imwrite('test-crop.png', crop_image)
+
+    # Call get_image_text() to appropriately transform it
+    get_image_text(crop_image, True)
+
+
+def get_image_text(image, save_image):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    inverted = np.invert(image)
+
+    text = pytesseract.image_to_string(inverted,lang='eng',config='--psm 10 --oem 3')
+    text = ' '.join(text.split())
+
+    if save_image:
+        print("Printing test image - CROPPED")
+        cv2.imwrite('test-transformed.png', inverted)
+    return text
 
 def define_timebox_coords(image, game_time):
     screen_info = pytesseract.image_to_boxes(image)
@@ -173,8 +226,7 @@ def get_game_time(pattern, pattern0, dec_pattern, image):
 
         if (time_box_defined):
             image = image[box_y1:box_y2, box_x1:box_x2]
-            text = pytesseract.image_to_string(image,lang='eng',config='--psm 10 --oem 3')
-            text = ' '.join(text.split())
+            text = get_image_text(image, False)
             print("text:", text)
             game_time = re.search(pattern, text)
             game_time_0 = re.search(pattern0, text)
@@ -248,6 +300,19 @@ def get_sec(time_str):
         total_sec = int(s)
     return total_sec
 
+def convert_long_timestamp(time_str):
+    global frame_msec
+    h,m,s,f = time_str.split(':')
+
+    h_msec = int(h) * 3600 * 1000
+    m_msec = int(m) * 60 * 1000
+    s_msec = int(s) * 1000
+    f_msec = int(f) * frame_msec
+
+    total_sec = h_msec + m_msec + s_msec + f_msec
+
+    return total_sec
+
 def escape_filename(filename):
     return filename.replace(":", "-")
 
@@ -271,7 +336,7 @@ def move_playhead(vidcap, time_diff, mode, prev_time, count):
             skip_time -= 1
 
     elif (mode == SEARCH_MODE.SKIP_INTERMISSION):
-        skip_time = prev_time + (60*15)
+        skip_time = prev_time + (60*30)
 
     new_time = curr_time + (skip_time * 1000)
     print ("skip_time : ", skip_time)
@@ -295,7 +360,7 @@ def create_clips(timestamps, videoFile):
 
     # Create our video capture object
     vidcap = cv2.VideoCapture(videoFile)
-    vidcap.set(cv2.CAP_PROP_POS_MSEC, 60*5*1000)
+    vidcap.set(cv2.CAP_PROP_POS_MSEC, 60*9*1000)
     success,image = vidcap.read()
     
     # Set up the initial target time
@@ -319,10 +384,15 @@ def create_clips(timestamps, videoFile):
     while success:
         # Read in frame
         success, image = vidcap.read()
-        print("Position: " + get_str(vidcap.get(cv2.CAP_PROP_POS_MSEC) / 1000))
+        pos = get_str(vidcap.get(cv2.CAP_PROP_POS_MSEC) / 1000)
+        print("Position: " + pos)
         print("Count: " + str(count))
         # Parse the time from the image ex. 19:34
         game_time = get_game_time(f_pattern, v0_pattern, dec_pattern, image)
+
+        if (pos == '00:18:22:07'):
+            print("Printing test image")
+            cv2.imwrite('test.png', image)
 
         if (game_time):
             print ("Found game time: ", game_time)
@@ -361,15 +431,20 @@ def main():
     # Read in command line arguments
     args = read_args()
 
-    # Set up the directory for our exports
-    create_clip_dir(args.starttime)
+    if args.test:
+        run_test(args.test)
 
-    # Read the tiemstamps into a list
-    timestamps = read_file(text_file, args.starttime)
-    print("timestamps:", timestamps)
+    else:
+        # Set up the directory for our exports
+        create_clip_dir(args.starttime)
 
-    # Create a clip for each timestamp
-    create_clips(timestamps, video_file)
+        # Read the tiemstamps into a list
+        timestamps = read_file(text_file, args.starttime)
+
+        # Create a clip for each timestamp
+        create_clips(timestamps, video_file)
+
+
 
 if __name__ == "__main__":
     main()
