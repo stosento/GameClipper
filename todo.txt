@@ -1,0 +1,45 @@
+- [ ] Have a “seed” feature to recommend “screen words”
+* Instantiate a map (dict) to store term, count
+    * term_count = map(term, int)
+* Get the video length, split it into 10 chunks
+    * VID_LEN / 10 = CHUNK_LENGTH
+    * for (i=0, i < 10, i++) chunks.append(CHUNK_LENGTH * i)
+* For each chunk, find a “game time” from regex alone
+    * search_interval = int(chunk_length / 10);
+    * for (chunk in chunks)
+        * set vid_cap to chunk (should be the start time of each chunk)
+        * check frame by search_interval
+        * if game_time
+            * split by whitespace into string array
+            * for (term in terms)
+                * if (term_count.keyExists(term))
+                    * term_count(term) += 1
+                * else
+                    * term_count(term) = 1
+* Print our map to a txt file
+
+
+------------------
+
+* Need to handle halftime
+* Better define the bounds to read time
+    restrict the box of the image
+* Handle command line arguments - https://stackoverflow.com/questions/11604653/add-command-line-arguments-with-flags-in-python3
+* Read in timestamps from ESPN play-by-play
+
+
+--------------------
+
+* Need to handle halftime
+
+
+04:34
+
+----2nd half----
+
+19:35
+
+If the new time > old time 
+    IS_HALFTIME
+
+
