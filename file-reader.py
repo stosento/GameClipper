@@ -15,6 +15,7 @@ import argparse
 import pathlib
 from pathlib import Path
 import configparser
+from readconfig import get_config_section, write_config
 
 # Set up pytesseract
 def is_Windows():
@@ -52,6 +53,8 @@ dec_pattern = re.compile(decimal_expression)
 
 fps=60
 frame_msec=0
+
+config_dict
 
 box_x1=0
 box_x2=0
@@ -380,6 +383,7 @@ def create_clips(timestamps, videoFile):
 
     global time_box_defined
     global period
+    global config_dict
 
     while success:
         # Read in frame
@@ -408,9 +412,11 @@ def create_clips(timestamps, videoFile):
                 prev_time = target_time
                 target_time = get_sec(timestamps.pop(0))
                 
+                #This is the case that we've found a period end
                 if (target_time > prev_time):
                     mode = SEARCH_MODE.SKIP_INTERMISSION
                     period += 1
+                    config_dict = write_config('TIMESTAMPS', {'test', 8})
             
             #Calculate the difference needed to get to target
             time_diff = game_time_sec - target_time
@@ -430,6 +436,10 @@ def main():
 
     # Read in command line arguments
     args = read_args()
+
+    # Read in config dict
+    global config_dict
+    config_dict = get_config_section()
 
     if args.test:
         run_test(args.test)
