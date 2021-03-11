@@ -38,8 +38,8 @@ class SEARCH_MODE(enum.Enum):
    SKIP_INTERMISSION = 3
 
 # Global Variables
-video_file = 'G20-H2.mp4'
-text_file = 'timestamp-G20-H2.txt'
+video_file = 'G22-H2.mp4'
+text_file = 'timestamp-G22-H2.txt'
 game_words = ['Michigan', 'Wisconsin', 'BTN', 'period']
 exp_dir = 'exp_clips'
 
@@ -65,10 +65,8 @@ def read_args():
 
     #-s STARTTIME
     parser.add_argument("-s", "--starttime", dest = "starttime", default = None, help="Start time")
-    #-t TEST
-    parser.add_argument("-t", "--test", dest = "test", default = None, help = "Test time")
     #-o OBS Times
-    parser.add_argument("-o", "--obs", dest = "obs", default = None, help = "Using the OBS time")
+    parser.add_argument("-m", "--mode", dest = "mode", default = None, help = "Mode. Use 'obs' for timestamps, otherwise OCR will be used.")
     
     return parser.parse_args()
 
@@ -110,41 +108,6 @@ def is_game_screen(game_words, search_text):
         if word.lower() in search_text.lower():
             return True
     return False
-
-def run_test(time_str):
-
-    # Create our video capture object
-    vidcap = cv2.VideoCapture(video_file)
-    
-    # How many MS per frame
-    fps = vidcap.get(cv2.CAP_PROP_FPS)
-    global frame_msec
-    frame_msec = 1000 / fps
-
-    # Convert the input timestamp to ms
-    total_msec = convert_long_timestamp(time_str)
-
-    # Move to the position we are interested in
-    vidcap.set(cv2.CAP_PROP_POS_MSEC,total_msec)
-    success,image = vidcap.read()
-
-    # Print our non-cropped image
-    cv2.imwrite('test.png', image)
-
-    # Read in the box coordinates
-    box_x1 = 1352
-    box_x2 = 1472
-    box_y1 = 917
-    box_y2 = 978
-
-    # Take the cropped image
-    crop_image = image[box_y1:box_y2, box_x1:box_x2]
-
-    # Print our cropped image
-    cv2.imwrite('test-crop.png', crop_image)
-
-    # Call get_image_text() to appropriately transform it
-    get_image_text(crop_image, True)
 
 
 def get_image_text(image, save_image):
@@ -459,21 +422,17 @@ def main():
     global config_dict
     config_dict = get_config_section()
 
-    if args.test:
-        run_test(args.test)
+    # Set up the directory for our exports
+    create_clip_dir(args.starttime)
 
+    # Read the tiemstamps into a list
+    # Create a clip for each timestamp
+    if args.obs == 'obs':
+        timestamps = read_ts_file(text_file)
+        export_clips(timestamps, video_file)
     else:
-        # Set up the directory for our exports
-        create_clip_dir(args.starttime)
-
-        # Read the tiemstamps into a list
-        # Create a clip for each timestamp
-        if args.obs:
-            timestamps = read_ts_file(text_file)
-            export_clips(timestamps, video_file)
-        else:
-            timestamps = read_file(text_file, args.starttime)
-            create_clips(timestamps, video_file)
+        timestamps = read_file(text_file, args.starttime)
+        create_clips(timestamps, video_file)
 
 
 
